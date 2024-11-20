@@ -1,0 +1,229 @@
+---
+title: "Correlated evolution of chlorophyllous-spored ferns, mycorrhizae, and habits"
+author: "Daniela Mellado-Mansilla"
+format:
+    html:
+      toc-title: Table of contents
+      toc: true
+      toc-depth: 4
+      number-sections: false
+      highlight-style: github
+      toc-location: left
+      cap-location: top
+      page-layout: full
+      embed-resources: true
+      self-contained-math: true
+      toc-expand: true
+output: 
+  html_document: 
+  output_file: index.html
+editor: visual
+execute: 
+  eval: false
+---
+
+## Libraries
+
+```{r}
+pacman::p_load(ape, diversitree, phytools, geiger, readxl, picante)
+```
+
+## MuSSE (Multi-State Speciation and Extinction) analysis
+
+This code was used to perform a MuSSE analysis for the publication "[*The relationship between chlorophyllous spores and mycorrhizal associations in ferns: evidence from an evolutionary approach*](https://doi.org/10.1002/ajb2.16094)". We used this analyses to obtain the transition rates between states as showed in the paper:
+
+[![Fig. 3 of Mellado-Mansilla et al. 2022](images/Figure_3.jpeg){fig-align="center"}](https://doi.org/10.1002/ajb2.16094)
+
+Here, I provide an example with the habit (epiphytic or terrestrial) vs. the spore type (chlorophyllous, non-chlorophyllous). You can find other codes related with this publication [here](https://datadryad.org/stash/dataset/doi:10.5061/dryad.bnzs7h4cr).
+
+### Data
+
+Two binary traits: spore type (chlorophyllous 1, non-chlorophyllous 0) and 'habit d' (epiphyte 1, terrestrial 0)
+
+```{r}
+
+musse_epiter <- read_excel("traits_final.xlsx") %>%
+  as.data.frame()%>%
+  select.list(., 1,2,6)
+
+row.names(musse_epiter) <- musse_epiter$Species
+
+musse_epiter <- na.omit(musse_epiter)
+
+```
+
+### Phylogeny
+
+Fern phylogeny first published by [Hernadez-Rojas et al. 2021](https://doi.org/10.21425/F5FBG50023)
+
+```{r}
+#Upload tree
+tree<-read.tree("5Feb_dated_tree.tre",tree.names = NULL)
+
+#prune tree
+matchmuet<-match.phylo.data(tree,musse_epiter)
+musse_epiter2<-matchmuet$data
+treemuet<-matchmuet$phy
+treeaultra2 <- force.ultrametric(treemuet)
+
+
+# Prepare states for MuSSE
+states <- paste0(musse_epiter2$spore_type,musse_epiter2$habit_d)
+states <- as.factor(states)
+states <- as.numeric(states)
+names(states) <- musse_epiter2$Species
+
+```
+
+**Here is our fern phylogeny with the information on each trait studied:**
+
+[![Fig.1 Mellado-Mansilla et al. 2022](images/Figure_1.jpeg)](https://doi.org/10.1002/ajb2.16094)
+
+### Sampling factor
+
+The analysis requires an estimated total number of the species with the character states to be analyzed. Here, I extrapolate the states according to the total species richness of extant ferns following [PPG1](https://doi.org/10.1111/jse.12229)
+
+```{r}
+#terrestrial achlorophyllous=7742
+#epiphyte achlorophyllous=1339
+#terrestrial chlorophyllous=231
+#epiphyte chlorophyllous=1079
+
+#species per state in my data
+table(states)
+#1   2   3   4 
+#951 433  46 296 
+
+#Proportional estimation
+fet<-c(0.12,0.3,0.2,0.3) 
+```
+
+## MuSSE
+
+### Setting up the model parameters
+
+```{r}
+# musse model
+liket <- make.musse(treeaultra2,states, k=4,sampling.f = fet)
+
+# Constrain likelihood by setting extinction and transition rates
+lik.et<-constrain(liket, mu2 ~ mu1, mu3 ~ mu1, mu4 ~ mu1,
+                  q14 ~ 0, q41 ~ 0, q23 ~ 0, q32 ~ 0)
+
+#Starting point
+p<-starting.point.musse(treeaultra2,k=4)
+
+
+#Fit the Model Using Maximum Likelihood Estimation (MLE)
+fit.et <- find.mle(lik.et, p[argnames(lik.et)],method = "optim", control=list(optim.method="BFGS"))
+
+
+```
+
+### Set priors
+
+```{r}
+
+# Extract parameters to use the highest rate of ML as prior
+fit.et$par.full
+#> 0.2624152*2
+#[1] 0.5248304
+
+prioret <- make.prior.exponential(0.52)
+```
+
+### Preliminar MCMC
+
+Run this MCMC with only 100 steps to get starting points for the "real" MCMC
+
+```{r}
+
+prelimet <- diversitree::mcmc(lik.et, fit.et$par, nsteps=100, prior=prioret, w=1, lower=0, print.every=0)
+summary(prelimet)
+
+coef(fit.et)
+fit.et$par
+
+#prelimet is used to get the W parameter
+wet <- diff(sapply(prelimet[2:(ncol(prelimet)-1)], quantile, c(0.05, 0.95)))
+wet
+
+```
+
+## Final Models
+
+```{r}
+#mcmc
+sampleset1<- diversitree::mcmc(lik.et, fit.et$par, nsteps=10000, w=wet, lower=0, prior=prioret, print.every=100, 
+save.file="mcmc_chain_epiter1.csv", save.every=5)
+
+
+sampleset2<- diversitree::mcmc(lik.et, fit.et$par, nsteps=10000, w=wet, lower=0, prior=prioret, print.every=100,     save.file="mcmc_chain_epiter2.csv", save.every=5)
+
+
+sampleset3<- diversitree::mcmc(lik.et, fit.et$par, nsteps=10000, w=wet, lower=0, prior=prioret, print.every=100, 
+save.file="mcmc_chain_epiter3.csv", save.every=5)
+
+
+sampleset4<- diversitree::mcmc(lik.et, fit.et$par, nsteps=10000, w=wet, lower=0, prior=prioret, print.every=100,     save.file="mcmc_chain_epiter4.csv", save.every=5)
+
+```
+
+### Check the MCMC chains
+
+```{r}
+# Analyze runs
+library(coda)
+runet1 <- coda::mcmc(sampleset1[,-1], start=1, thin=1)
+runet2 <- coda::mcmc(sampleset2[,-1], start=1, thin=1)
+runet3 <- coda::mcmc(sampleset3[,-1], start=1, thin=1)
+runet4 <- coda::mcmc(sampleset4[,-1], start=1, thin=1)
+
+runs_et <- coda::mcmc.list(runet1,runet2)
+
+#plot diagnostics
+par(mar=rep(2,4))
+plot(runs_et)
+effectiveSize(runs_et)
+View(runs_et)
+
+```
+
+![](images/primero.png)
+
+```{r}
+#Gelman-Rubin Diagnostic Plot:
+gelman.plot(runs_et)
+gelman.diag(runs_et)
+
+
+```
+
+![](images/000010-01.png)
+
+### Posterior probabilities
+
+```{r}
+####posterior probabilitiies
+et1<-read.csv("mcmc_chain_epiter1___.csv")
+et2<-read.csv("mcmc_chain_epiter2___.csv")
+et3<-read.csv("mcmc_chain_epiter3___.csv")
+et4<-read.csv("mcmc_chain_epiter4___.csv")
+
+#burn in removing the first 1000 iterations from each MCMC chain
+bi_et1<-subset(et1, i > 1000)
+bi_et2<-subset(et2, i > 1000)
+bi_et3<-subset(et3, i > 1000)
+bi_et4<-subset(et4, i > 1000)
+
+#merge
+ppet<-rbind(bi_et1,bi_et2,bi_et3,bi_et4)
+summary(ppet)
+
+#Posterior probabilities
+mean(ppet$q24 > ppet$q42)
+#0.9990278
+
+# 95% HPD rates 
+quantile(ppet$mu1,probs=c(0.025,0.5,0.975))
+```
